@@ -482,10 +482,20 @@ const isPromise = (promise) => typeof promise?.then === "function";
 
 const sanitizeKeyPrefixLeadingNumber = /^([0-9])/;
 const sanitizeKeyRemoveDisallowedChar = /[^a-zA-Z0-9]+/g;
+const sanitizeKeyCache = new Map();
+const sanitizeKeyCacheMaxSize = 1024;
 export const sanitizeKey = (key) => {
-	return key
-		.replace(sanitizeKeyPrefixLeadingNumber, "_$1")
-		.replace(sanitizeKeyRemoveDisallowedChar, "_");
+	let sanitized = sanitizeKeyCache.get(key);
+	if (sanitized === undefined) {
+		sanitized = key
+			.replace(sanitizeKeyPrefixLeadingNumber, "_$1")
+			.replace(sanitizeKeyRemoveDisallowedChar, "_");
+		// Stryker disable next-line ConditionalExpression,EqualityOperator: the always-cache and cap-boundary variants are equivalent - storing past (or one entry beyond) the cap only changes whether a deterministic value is later recomputed, never the returned value, and killing them would require a test coupled to the exact global fill state of the memo. (The never-cache variants are killed by the replace-spy memo test.)
+		if (sanitizeKeyCache.size < sanitizeKeyCacheMaxSize) {
+			sanitizeKeyCache.set(key, sanitized);
+		}
+	}
+	return sanitized;
 };
 
 // Resolve the API Gateway / VPC Lattice event "version" used by the HTTP
@@ -578,6 +588,21 @@ const silenceFetchRejections = (value) => {
 	}
 };
 
+// Module-scope so the warm cache-hit path allocates no closure; only the
+// scheduling paths (modified entry, miss) create the timer callback.
+const scheduleRefresh = (
+	duration,
+	options,
+	middlewareFetch,
+	middlewareFetchRequest,
+) =>
+	duration > 0 && Number.isFinite(duration)
+		? setTimeout(
+				() => processCache(options, middlewareFetch, middlewareFetchRequest),
+				duration,
+			).unref()
+		: undefined;
+
 export const processCache = (
 	options,
 	middlewareFetch = () => undefined,
@@ -588,13 +613,6 @@ export const processCache = (
 	cacheExpiry = cacheKeyExpiry?.[cacheKey] ?? cacheExpiry;
 	validateCacheExpiry(cacheExpiry);
 	const now = Date.now();
-	const scheduleRefresh = (duration) =>
-		duration > 0 && Number.isFinite(duration)
-			? setTimeout(
-					() => processCache(options, middlewareFetch, middlewareFetchRequest),
-					duration,
-				).unref()
-			: undefined;
 	if (cacheExpiry) {
 		const cached = getCache(cacheKey);
 		const effectiveExpiry =
@@ -608,7 +626,12 @@ export const processCache = (
 				const value = middlewareFetch(middlewareFetchRequest, cached.value);
 				silenceFetchRejections(value);
 				Object.assign(cached.value, value);
-				const refresh = scheduleRefresh(cached.expiry - now);
+				const refresh = scheduleRefresh(
+					cached.expiry - now,
+					options,
+					middlewareFetch,
+					middlewareFetchRequest,
+				);
 				const entry = { value: cached.value, expiry: cached.expiry, refresh };
 				cache.set(cacheKey, entry);
 				return entry;
@@ -634,7 +657,12 @@ export const processCache = (
 	const duration = cacheExpiry > 86400000 ? cacheExpiry - now : cacheExpiry;
 	if (cacheExpiry) {
 		clearTimeout(cache.get(cacheKey)?.refresh);
-		const refresh = scheduleRefresh(duration);
+		const refresh = scheduleRefresh(
+			duration,
+			options,
+			middlewareFetch,
+			middlewareFetchRequest,
+		);
 		cache.set(cacheKey, { value, expiry, refresh });
 		evictCache(cacheMaxSize);
 	}

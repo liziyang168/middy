@@ -153,7 +153,6 @@ const runRequest = async (
 	const timeoutEarly = plugin.timeoutEarly && getRemainingTimeInMillis;
 
 	try {
-		// Stryker disable next-line ConditionalExpression: forcing this to `true` is equivalent - runMiddlewares over an empty array is a no-op, so the guard is a pure performance pre-filter. (The BlockStatement variant remains active and is killed by every before-middleware test.)
 		if (beforeMiddlewares.length) {
 			await runMiddlewares(request, beforeMiddlewares, plugin);
 		}
@@ -175,7 +174,6 @@ const runRequest = async (
 				request.context,
 				abortOpts,
 			);
-			// Stryker disable next-line ConditionalExpression: forcing this to `true` is equivalent - a non-Promise result routed through the race/await path yields the same response (a settled value wins Promise.race before any timer fires, and `await` returns it unchanged), so the guard is a pure fast-path split. (The BlockStatement variant remains active and is killed by every async handler test.)
 			if (handlerResult instanceof Promise) {
 				if (timeoutEarly) {
 					let timeoutResolve;
@@ -210,20 +208,17 @@ const runRequest = async (
 				request.response = handlerResult;
 			}
 
-			// Stryker disable next-line ConditionalExpression: forcing this to `true` is equivalent - when no early timeout was scheduled timeoutID is undefined and clearTimeout(undefined) is a spec no-op, so the guard has no observable effect.
 			if (timeoutID) {
 				clearTimeout(timeoutID);
 			}
 
 			plugin.afterHandler();
-			// Stryker disable next-line ConditionalExpression: forcing this to `true` is equivalent - runMiddlewares over an empty array is a no-op, so the guard is a pure performance pre-filter. (The BlockStatement variant remains active and is killed by every after-middleware test.)
 			if (afterMiddlewares.length) {
 				await runMiddlewares(request, afterMiddlewares, plugin);
 			}
 		}
 	} catch (err) {
 		// timeout should be aborted when errors happen in handler
-		// Stryker disable next-line ConditionalExpression: forcing this to `true` is equivalent - clearTimeout(undefined) is a spec no-op when no timer was scheduled, so the guard cannot be observed. (The BlockStatement/false variants remain active and are covered by the "clear the scheduled early timeout when the handler throws" test.)
 		if (timeoutID) {
 			clearTimeout(timeoutID);
 		}
@@ -259,7 +254,6 @@ const runMiddlewares = async (request, middlewares, plugin) => {
 	for (const nextMiddleware of middlewares) {
 		if (beforeMiddlewareHook) beforeMiddlewareHook(nextMiddleware.name);
 		let res = nextMiddleware(request);
-		// Stryker disable next-line ConditionalExpression: forcing this to `true` is equivalent - awaiting a non-Promise returns the same value one microtask later, so the guard is a pure fast-path split.
 		if (res instanceof Promise) res = await res;
 		if (afterMiddlewareHook) afterMiddlewareHook(nextMiddleware.name);
 		// short circuit chaining and respond early

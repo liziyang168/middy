@@ -7,6 +7,13 @@ import middy from "./index.js";
 const _event = {};
 const _context = {};
 
+// Non-Promise thenable built via a computed key: a literal `then` property
+// would trip lint/suspicious/noThenProperty, which should stay enabled to
+// catch accidental thenables; these tests need one deliberately to assert
+// middy never awaits it.
+const thenKey = "then";
+const createThenable = (onThen) => ({ [thenKey]: onThen });
+
 // Scoped under a describe so the durable runner setup/teardown beforeEach hooks
 // register on this suite, not the shared root. Under the node-test runner
 // (isolation:"none") a root-level beforeEach runs before every test in every
@@ -132,6 +139,26 @@ describe("executionModeDurableContext", () => {
 
 		strictEqual(execution.getStatus(), "FAILED");
 		strictEqual(execution.getError().errorMessage, "requestEnd failed");
+	});
+
+	test("Should not await a thenable returned by requestEnd in durable context", async (t) => {
+		// Real-Promises-only contract: only a real Promise from requestEnd is
+		// awaited; a plain thenable is ignored, so its then() must never run.
+		let thenAwaited = false;
+		const handler = middy({
+			executionMode: executionModeDurableContext,
+			requestEnd: () =>
+				createThenable((resolve) => {
+					thenAwaited = true;
+					resolve();
+				}),
+		}).handler(() => "ok");
+		const runner = new LocalDurableTestRunner({ handlerFunction: handler });
+
+		const execution = await runner.run({ payload: {} });
+
+		strictEqual(execution.getStatus(), "SUCCEEDED");
+		strictEqual(thenAwaited, false);
 	});
 
 	test("Should await async requestEnd hook and propagate its rejection in durable context", async (t) => {

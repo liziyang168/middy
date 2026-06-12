@@ -402,6 +402,41 @@ describe("sanitizeKey", () => {
 		const key = sanitizeKey("api_secret_key0_pem");
 		strictEqual(key, "api_secret_key0_pem");
 	});
+
+	test("sanitizeKey should not recompute a memoized key", async (t) => {
+		// Spy on String.prototype.replace (synchronously, restored below):
+		// the first call computes via two replace() calls; the repeat must be
+		// served from the memo with zero further replace() calls. Must run
+		// before the cache-cap test below fills the memo.
+		const original = String.prototype.replace;
+		let replaceCalls = 0;
+		String.prototype.replace = function (...args) {
+			replaceCalls++;
+			return original.apply(this, args);
+		};
+		try {
+			strictEqual(sanitizeKey("memo-spy/key.0"), "memo_spy_key_0");
+			const firstCallCount = replaceCalls;
+			strictEqual(firstCallCount > 0, true);
+			strictEqual(sanitizeKey("memo-spy/key.0"), "memo_spy_key_0");
+			strictEqual(replaceCalls, firstCallCount);
+		} finally {
+			String.prototype.replace = original;
+		}
+	});
+
+	test("sanitizeKey should return identical results for repeated and cache-capped keys", async (t) => {
+		// First call computes and memoizes; the repeat must match exactly.
+		strictEqual(sanitizeKey("repeat-key.0"), "repeat_key_0");
+		strictEqual(sanitizeKey("repeat-key.0"), "repeat_key_0");
+		// Push well past the memo cap (1024): keys beyond the cap are computed
+		// without being stored and must still sanitize correctly.
+		for (let i = 0; i < 1100; i++) {
+			strictEqual(sanitizeKey(`cap-key.${i}`), `cap_key_${i}`);
+		}
+		strictEqual(sanitizeKey("post-cap//key.1"), "post_cap_key_1");
+		strictEqual(sanitizeKey("post-cap//key.1"), "post_cap_key_1");
+	});
 });
 
 describe("resolveHttpEventVersion", () => {
