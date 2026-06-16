@@ -1053,3 +1053,112 @@ test("DynamoDB N: out-of-range non-integer string throws BigInt conversion error
 		},
 	);
 });
+
+// Prototype-pollution protection (matches http-json-body-parser).
+// Attacker-controlled record payloads carrying a forbidden key must be
+// rejected with a 422 instead of silently parsed.
+test("It should reject an SQS body containing a __proto__ key with 422", async (t) => {
+	const handler = middy((event) => event).use(eventNormalizer());
+
+	const event = createEvent.default("aws:sqs");
+	event.Records[0].body = '{ "__proto__": { "polluted": true }, "foo": "bar" }';
+
+	let thrown = false;
+	try {
+		await handler(event, defaultContext);
+	} catch (e) {
+		thrown = true;
+		strictEqual(e.statusCode, 422);
+		strictEqual(e.message, "Forbidden key in JSON body");
+		strictEqual(e.cause.package, "@middy/event-normalizer");
+		strictEqual(e.cause.data, "__proto__");
+	}
+	ok(thrown, "expected handler to reject a __proto__ SQS body");
+	// Object.prototype must be untouched.
+	strictEqual({}.polluted, undefined);
+});
+
+test("It should reject a Kinesis (base64) payload containing a __proto__ key with 422", async (t) => {
+	const handler = middy((event) => event).use(eventNormalizer());
+
+	const event = createEvent.default("aws:kinesis");
+	event.Records[0].kinesis.data = Buffer.from(
+		'{ "__proto__": { "polluted": true }, "foo": "bar" }',
+		"utf-8",
+	).toString("base64");
+
+	let thrown = false;
+	try {
+		await handler(event, defaultContext);
+	} catch (e) {
+		thrown = true;
+		strictEqual(e.statusCode, 422);
+		strictEqual(e.message, "Forbidden key in JSON body");
+		strictEqual(e.cause.package, "@middy/event-normalizer");
+		strictEqual(e.cause.data, "__proto__");
+	}
+	ok(thrown, "expected handler to reject a __proto__ Kinesis payload");
+	strictEqual({}.polluted, undefined);
+});
+
+test("It should reject an SNS message containing a constructor.prototype key with 422", async (t) => {
+	const handler = middy((event) => event).use(eventNormalizer());
+
+	const event = createEvent.default("aws:sns");
+	event.Records[0].Sns.Message =
+		'{ "constructor": { "prototype": { "polluted": true } }, "foo": "bar" }';
+
+	let thrown = false;
+	try {
+		await handler(event, defaultContext);
+	} catch (e) {
+		thrown = true;
+		strictEqual(e.statusCode, 422);
+		strictEqual(e.message, "Forbidden key in JSON body");
+		strictEqual(e.cause.package, "@middy/event-normalizer");
+		strictEqual(e.cause.data, "constructor");
+	}
+	ok(thrown, "expected handler to reject a constructor.prototype SNS message");
+	strictEqual({}.polluted, undefined);
+});
+
+test("It should still parse a benign SQS body normally after the proto guard", async (t) => {
+	const handler = middy((event) => event).use(eventNormalizer());
+
+	const body = { hello: "world", prototype: { x: 1 }, constructor: "Widget" };
+	const event = createEvent.default("aws:sqs");
+	event.Records[0].body = JSON.stringify(body);
+	const response = await handler(event, defaultContext);
+
+	deepStrictEqual(response.Records[0].body, body);
+});
+
+test("It should still parse a benign Kinesis (base64) payload normally after the proto guard", async (t) => {
+	const handler = middy((event) => event).use(eventNormalizer());
+
+	const data = { hello: "world" };
+	const event = createEvent.default("aws:kinesis");
+	event.Records[0].kinesis.data = Buffer.from(
+		JSON.stringify(data),
+		"utf-8",
+	).toString("base64");
+	const response = await handler(event, defaultContext);
+
+	deepStrictEqual(response.Records[0].kinesis.data, data);
+});
+
+test("It should return a base64 payload unchanged when it looks like JSON but is malformed", async (t) => {
+	const handler = middy((event) => event).use(eventNormalizer());
+
+	// Decoded text starts with `{` so the parse is attempted, but it is not
+	// valid JSON and carries no forbidden key: jsonParseProtectProto throws a
+	// plain SyntaxError, which base64Parse swallows and returns the raw text.
+	const malformed = "{not valid json";
+	const event = createEvent.default("aws:kinesis");
+	event.Records[0].kinesis.data = Buffer.from(malformed, "utf-8").toString(
+		"base64",
+	);
+	const response = await handler(event, defaultContext);
+
+	strictEqual(response.Records[0].kinesis.data, malformed);
+});

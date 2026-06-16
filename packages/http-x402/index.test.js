@@ -771,7 +771,7 @@ test("human returns false - normal payment flow", async (t) => {
 	strictEqual(response.statusCode, 402);
 });
 
-test("API Gateway v1 resource URL from Host header", async (t) => {
+test("API Gateway v1 resource URL from trusted requestContext, ignoring spoofed Host header", async (t) => {
 	const { MockFacilitatorClient, mockVerify } = makeMockClient(
 		t,
 		defaultVerifyResult,
@@ -788,10 +788,15 @@ test("API Gateway v1 resource URL from Host header", async (t) => {
 	await handler(
 		{
 			headers: {
-				Host: "api.example.com",
+				Host: "attacker.example.com",
+				host: "attacker.example.com",
 				"payment-signature": makePaymentHeader(testPayload),
 			},
-			path: "/api/data",
+			path: "/spoofed/path",
+			requestContext: {
+				domainName: "api.example.com",
+				path: "/api/data",
+			},
 		},
 		defaultContext,
 	);
@@ -1347,33 +1352,7 @@ test("too-many-fractional-digits error message names decimals", (t) => {
 	ok(message?.includes("price has more fractional digits than decimals (6)"));
 });
 
-test("buildResource v1 falls back to localhost host when no Host header", async (t) => {
-	const { MockFacilitatorClient, mockVerify } = makeMockClient(
-		t,
-		defaultVerifyResult,
-		defaultSettleResult,
-	);
-	const handler = middy(() => ({
-		statusCode: 200,
-		body: "ok",
-		headers: {},
-	})).use(
-		httpX402({ ...defaultOptions, FacilitatorClient: MockFacilitatorClient }),
-	);
-
-	await handler(
-		{
-			headers: { "payment-signature": makePaymentHeader(testPayload) },
-			path: "/api/data",
-		},
-		defaultContext,
-	);
-
-	const [, requirements] = mockVerify.mock.calls[0].arguments;
-	strictEqual(requirements.resource, "https://localhost/api/data");
-});
-
-test("buildResource v1 falls back to / path when no path", async (t) => {
+test("buildResource v1 falls back to localhost host when requestContext is absent", async (t) => {
 	const { MockFacilitatorClient, mockVerify } = makeMockClient(
 		t,
 		defaultVerifyResult,
@@ -1390,8 +1369,40 @@ test("buildResource v1 falls back to / path when no path", async (t) => {
 	await handler(
 		{
 			headers: {
-				Host: "api.example.com",
+				Host: "attacker.example.com",
 				"payment-signature": makePaymentHeader(testPayload),
+			},
+		},
+		defaultContext,
+	);
+
+	const [, requirements] = mockVerify.mock.calls[0].arguments;
+	strictEqual(requirements.resource, "https://localhost/");
+});
+
+test("buildResource v1 falls back to / path when requestContext has no path", async (t) => {
+	const { MockFacilitatorClient, mockVerify } = makeMockClient(
+		t,
+		defaultVerifyResult,
+		defaultSettleResult,
+	);
+	const handler = middy(() => ({
+		statusCode: 200,
+		body: "ok",
+		headers: {},
+	})).use(
+		httpX402({ ...defaultOptions, FacilitatorClient: MockFacilitatorClient }),
+	);
+
+	await handler(
+		{
+			headers: {
+				Host: "attacker.example.com",
+				"payment-signature": makePaymentHeader(testPayload),
+			},
+			path: "/spoofed/path",
+			requestContext: {
+				domainName: "api.example.com",
 			},
 		},
 		defaultContext,

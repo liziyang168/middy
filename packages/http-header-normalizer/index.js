@@ -85,15 +85,19 @@ const defaults = {
 	normalizeHeaderKey,
 };
 
+export const NORMALIZED_KEY_CACHE_MAX = 2000;
+
 const httpHeaderNormalizerMiddleware = (opts = {}) => {
 	const options = { ...defaults, ...opts };
 
-	// Cache for normalized header keys to avoid repeated split/map/join
 	const normalizedKeyCache = new Map();
 	const cachedNormalizeKey = (key) => {
 		let normalized = normalizedKeyCache.get(key);
 		if (normalized === undefined) {
 			normalized = options.normalizeHeaderKey(key, options.canonical);
+			if (normalizedKeyCache.size >= NORMALIZED_KEY_CACHE_MAX) {
+				normalizedKeyCache.delete(normalizedKeyCache.keys().next().value);
+			}
 			normalizedKeyCache.set(key, normalized);
 		}
 		return normalized;

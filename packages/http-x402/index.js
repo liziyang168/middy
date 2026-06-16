@@ -262,8 +262,9 @@ const buildResource = (event) => {
 	if (event.version === "2.0") {
 		return `https://${event.requestContext.domainName}${event.requestContext.http.path}`;
 	}
-	const host = event.headers?.Host ?? event.headers?.host ?? "localhost";
-	return `https://${host}${event.path ?? "/"}`;
+	const host = event.requestContext?.domainName ?? "localhost";
+	const path = event.requestContext?.path ?? "/";
+	return `https://${host}${path}`;
 };
 
 const encodeHeader = (obj) =>

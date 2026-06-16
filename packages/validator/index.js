@@ -63,10 +63,13 @@ const validatorMiddleware = (opts = {}) => {
 			const validEvent = eventSchema(request.event);
 
 			if (!validEvent) {
+				const lang = request.context.preferredLanguage;
 				const localize =
-					languages[request.context.preferredLanguage] ??
+					(Object.hasOwn(languages, lang) ? languages[lang] : undefined) ??
 					languages[defaultLanguage];
-				localize?.(eventSchema.errors);
+				if (typeof localize === "function") {
+					localize(eventSchema.errors);
+				}
 
 				// Bad Request
 				throw createError(400, "Event object failed validation", {

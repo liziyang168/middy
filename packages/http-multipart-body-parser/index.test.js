@@ -905,6 +905,50 @@ test("It should accumulate uploaded file content bytes", async (t) => {
 	ok(response.file.content.length > 0);
 });
 
+test("It should reject with a 413 when a file part exceeds the configured fileSize limit instead of silently truncating", async (t) => {
+	const handler = middy((event) => event.body);
+
+	handler.use(httpMultipartBodyParser({ busboy: { limits: { fileSize: 4 } } }));
+
+	// "hello world!" is 12 bytes, well over the 4-byte fileSize limit. Busboy
+	// truncates the stream and sets file.truncated; the middleware must fail
+	// loudly with a 413 rather than return a clipped 4-byte buffer.
+	const event = {
+		headers: { "content-type": "multipart/form-data; boundary=TEST" },
+		body: '--TEST\r\nContent-Disposition: form-data; name="file"; filename="f.txt"\r\nContent-Type: text/plain\r\n\r\nhello world!\r\n--TEST--',
+		isBase64Encoded: false,
+	};
+
+	try {
+		await handler(event, defaultContext);
+		ok(false, "expected throw");
+	} catch (e) {
+		strictEqual(e.statusCode, 413);
+		strictEqual(e.message, "Request Entity Too Large");
+		strictEqual(e.cause.package, "@middy/http-multipart-body-parser");
+	}
+});
+
+test("It should parse a small file part that stays within the configured fileSize limit", async (t) => {
+	const handler = middy((event) => event.body);
+
+	handler.use(
+		httpMultipartBodyParser({ busboy: { limits: { fileSize: 1000 } } }),
+	);
+
+	// "hello" is 5 bytes, under the 1000-byte limit; parsing is unchanged and
+	// the file is not truncated.
+	const event = {
+		headers: { "content-type": "multipart/form-data; boundary=TEST" },
+		body: '--TEST\r\nContent-Disposition: form-data; name="file"; filename="f.txt"\r\nContent-Type: text/plain\r\n\r\nhello\r\n--TEST--',
+		isBase64Encoded: false,
+	};
+
+	const response = await handler(event, defaultContext);
+	strictEqual(response.file.content.toString(), "hello");
+	strictEqual(response.file.truncated, false);
+});
+
 test("It should reject a file field name exceeding the cap and pass at the boundary", async (t) => {
 	const overHandler = middy((event) => event.body);
 	overHandler.use(

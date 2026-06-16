@@ -100,6 +100,9 @@ const httpMultipartBodyParserMiddleware = (opts = {}) => {
 				request.event.body = multipartData;
 			})
 			.catch((err) => {
+				if (typeof err.statusCode !== "undefined") {
+					throw err;
+				}
 				// UnprocessableEntity
 				throw createError(
 					422,
@@ -162,6 +165,14 @@ const parseMultipartData = (event, options) => {
 					totalLength += data.length;
 				});
 				file.on("end", () => {
+					if (file.truncated) {
+						reject(
+							createError(413, "Request Entity Too Large", {
+								cause: { package: pkg, data: filename },
+							}),
+						);
+						return;
+					}
 					attachment.truncated = file.truncated;
 					// Pass total length to skip Buffer.concat's prepass scan.
 					attachment.content = Buffer.concat(chunks, totalLength);

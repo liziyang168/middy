@@ -488,6 +488,47 @@ test("It should handle invalid schema as a BadRequest without i18n", async (t) =
 	}
 });
 
+const prototypePollutionKeys = ["valueOf", "hasOwnProperty", "__proto__"];
+
+for (const lang of prototypePollutionKeys) {
+	test(`It should ignore a prototype-chain preferredLanguage (${lang}) and still return the 400`, async (t) => {
+		const handler = middy((event, context) => event.body);
+
+		const schema = {
+			type: "object",
+			required: ["foo"],
+			properties: { foo: { type: "string" } },
+		};
+
+		handler.use(
+			validator({
+				eventSchema: transpileSchema(schema),
+				languages: { en: localize.en },
+			}),
+		);
+
+		let error;
+		try {
+			await handler({}, { ...defaultContext, preferredLanguage: lang });
+		} catch (e) {
+			error = e;
+		}
+		ok(error, "expected the event validation to throw");
+		strictEqual(error.cause.package, "@middy/validator");
+		strictEqual(error.statusCode, 400);
+		strictEqual(error.message, "Event object failed validation");
+		deepStrictEqual(error.cause.data, [
+			{
+				instancePath: "",
+				keyword: "required",
+				message: "must have required property foo",
+				params: { missingProperty: "foo" },
+				schemaPath: "#/required",
+			},
+		]);
+	});
+}
+
 test("It should validate context object", async (t) => {
 	const expectedResponse = {
 		body: "Hello world",
