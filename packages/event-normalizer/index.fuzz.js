@@ -41,7 +41,15 @@ test("fuzz `event` w/ SQS Records", async () => {
 		{
 			numRuns: 10_000,
 
-			examples: [],
+			// SQS body is an arbitrary string; the JSON literal `null` parses to
+			// `null`, which must not be dereferenced as an SNS notification.
+			examples: [
+				[
+					{
+						Records: [{ body: "null", messageId: "", eventSource: "aws:sqs" }],
+					},
+				],
+			],
 		},
 	);
 });

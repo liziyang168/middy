@@ -174,9 +174,9 @@ const events = Object.assign(Object.create(null), {
 	"aws:sqs": (record, options) => {
 		record.body = jsonParseProtectProto(record.body, undefined, pkg);
 		// SNS -> SQS Special Case
-		if (record.body.Type === "Notification") {
+		if (record.body?.Type === "Notification") {
 			events["aws:sns:sqs"](record.body, options);
-		} else {
+		} else if (typeof record.body === "object" && record.body !== null) {
 			parseEvent(record.body, options);
 		}
 	},
