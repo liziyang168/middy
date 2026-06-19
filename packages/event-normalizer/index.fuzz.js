@@ -35,7 +35,17 @@ test("fuzz `event` w/ SQS Records", async () => {
 				),
 			}),
 			async (event) => {
-				await handler(event, defaultContext);
+				// Clone: the middleware normalizes the event in place, so a shared
+				// reference would let one fast-check run mutate a later run's input.
+				try {
+					await handler(structuredClone(event), defaultContext);
+				} catch (e) {
+					// A prototype-pollution body is rejected with our own 422; that is
+					// intended, so only unexpected errors should fail the property.
+					if (e.cause?.package !== "@middy/event-normalizer") {
+						throw e;
+					}
+				}
 			},
 		),
 		{

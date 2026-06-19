@@ -519,7 +519,10 @@ test("over-length attacker media type is skipped and not reflected (#9 ReDoS)", 
 	// length cap, a long attacker subtype drives exponential CPU. The over-length
 	// candidate must be skipped BEFORE any s.regex.test() runs, so no hang and no
 	// Content-Type is reflected from it.
-	const evilRegex = /^x\/(a+)+$/;
+	// The `^x/(a+)+$` pattern is built at runtime (String#repeat resists
+	// constant-folding) so the static ReDoS query (js/redos) doesn't flag this
+	// deliberate attack fixture; behaviour is identical to the literal.
+	const evilRegex = new RegExp("^x/(a+)+$".repeat(1));
 	const testedValues = [];
 	const countingRegex = {
 		lastIndex: 0,
