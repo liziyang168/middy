@@ -1,7 +1,11 @@
 // Copyright 2017 - 2026 will Farrell, Luciano Mammino, and Middy contributors.
 // SPDX-License-Identifier: MIT
 import { gunzipSync } from "node:zlib";
-import { jsonSafeParse, validateOptions } from "@middy/util";
+import {
+	jsonParseProtectProto,
+	jsonSafeParse,
+	validateOptions,
+} from "@middy/util";
 
 const name = "event-normalizer";
 const pkg = `@middy/${name}`;
@@ -156,26 +160,50 @@ const events = Object.assign(Object.create(null), {
 		events["aws:kafka"](event);
 	},
 	"aws:sns": (record, options) => {
-		record.Sns.Message = jsonSafeParse(record.Sns.Message);
+		record.Sns.Message = jsonParseProtectProto(
+			record.Sns.Message,
+			undefined,
+			pkg,
+		);
 		parseEvent(record.Sns.Message, options);
 	},
 	"aws:sns:sqs": (record, options) => {
-		record.Message = jsonSafeParse(record.Message);
+		record.Message = jsonParseProtectProto(record.Message, undefined, pkg);
 		parseEvent(record.Message, options);
 	},
 	"aws:sqs": (record, options) => {
-		record.body = jsonSafeParse(record.body);
+		record.body = jsonParseProtectProto(record.body, undefined, pkg);
 		// SNS -> SQS Special Case
-		if (record.body.Type === "Notification") {
+		if (record.body?.Type === "Notification") {
 			events["aws:sns:sqs"](record.body, options);
-		} else {
+		} else if (typeof record.body === "object" && record.body !== null) {
 			parseEvent(record.body, options);
 		}
 	},
 });
 const base64Decode = (data) => Buffer.from(data, "base64");
-const base64Parse = (data) =>
-	jsonSafeParse(base64Decode(data).toString("utf-8"));
+// Base64 batch sources (Kinesis, Firehose, Kafka, RabbitMQ, ActiveMQ) can
+// carry non-JSON binary/text payloads, so we keep jsonSafeParse's forgiving
+// contract: only attempt a parse when the decoded text looks like JSON, and
+// fall back to the raw string on a genuine parse failure. We swap the inner
+// parser for jsonParseProtectProto so a JSON payload carrying a forbidden
+// `__proto__` / `constructor.prototype` key is rejected with a 422, matching
+// the sibling parsers (http-json-body-parser, ws-json-body-parser).
+const base64Parse = (data) => {
+	const text = base64Decode(data).toString("utf-8");
+	const firstChar = text[0];
+	if (firstChar !== "{" && firstChar !== "[" && firstChar !== '"') {
+		return text;
+	}
+	try {
+		return jsonParseProtectProto(text, undefined, pkg);
+	} catch (err) {
+		if (err.statusCode) {
+			throw err;
+		}
+		return text;
+	}
+};
 const normalizeS3Key = (key) =>
 	decodeURIComponent(key.replace(normalizeS3KeyReplacePlus, " ")); // decodeURIComponent(key.replaceAll('+', ' '))
 

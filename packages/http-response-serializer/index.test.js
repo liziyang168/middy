@@ -491,9 +491,9 @@ test("preferredMediaTypes fallback is empty when context.preferredMediaTypes is 
 	// nullish. With a catch-all serializer regex and NO defaultContentType, the
 	// candidate `types` list is exactly the preferredMediaTypes fallback plus
 	// the (undefined) defaultContentType. The real empty `[]` fallback means the
-	// first (and only) candidate matched is `undefined`, so the Content-Type the
-	// serializer sets is `undefined`. A non-empty fallback would put its own
-	// value first, making the matched/assigned Content-Type that injected value.
+	// first (and only) candidate matched is `undefined`. A catch-all regex still
+	// matches and the body is serialized, but the non-string `undefined` candidate
+	// fails the media-type grammar so no Content-Type header is reflected.
 	const handler = middy((event, context) => createHttpResponse());
 	handler.use(
 		httpResponseSerializer({
@@ -509,9 +509,114 @@ test("preferredMediaTypes fallback is empty when context.preferredMediaTypes is 
 	const response = await handler({ headers: {} }, { ...defaultContext });
 
 	strictEqual(response.body, "serialized:Hello World");
-	// The matched candidate type is undefined (empty fallback, undefined default).
-	strictEqual(response.headers["Content-Type"], undefined);
-	ok(Object.hasOwn(response.headers, "Content-Type"));
+	// The matched candidate type is undefined: not a valid media type, so no
+	// Content-Type is echoed.
+	ok(!Object.hasOwn(response.headers, "Content-Type"));
+});
+
+test("over-length attacker media type is skipped and not reflected (#9 ReDoS)", async (t) => {
+	// A catastrophic-backtracking regex a developer might register. Without a
+	// length cap, a long attacker subtype drives exponential CPU. The over-length
+	// candidate must be skipped BEFORE any s.regex.test() runs, so no hang and no
+	// Content-Type is reflected from it.
+	// The `^x/(a+)+$` pattern is built at runtime (String#repeat resists
+	// constant-folding) so the static ReDoS query (js/redos) doesn't flag this
+	// deliberate attack fixture; behaviour is identical to the literal.
+	const evilRegex = new RegExp("^x/(a+)+$".repeat(1));
+	const testedValues = [];
+	const countingRegex = {
+		lastIndex: 0,
+		test(value) {
+			testedValues.push(value);
+			return evilRegex.test(value);
+		},
+	};
+
+	// 200 'a' chars: well over the cap; would hang against the evil regex.
+	const longSubtype = `x/${"a".repeat(200)}b`;
+
+	const handler = middy((event, context) => createHttpResponse());
+	handler.use(
+		httpResponseSerializer({
+			serializers: [
+				{
+					regex: countingRegex,
+					serializer: ({ body }) => `serialized:${body}`,
+				},
+			],
+		}),
+	);
+
+	// Simulate http-content-negotiation putting the attacker subtype first.
+	const event = { headers: {} };
+	const context = {
+		...defaultContext,
+		preferredMediaTypes: [longSubtype],
+	};
+
+	const start = Date.now();
+	const response = await handler(event, context);
+	const elapsed = Date.now() - start;
+
+	// The over-length candidate must never reach the serializer regex.
+	ok(!testedValues.includes(longSubtype));
+	// No Content-Type reflected from the attacker value.
+	ok(!Object.hasOwn(response.headers, "Content-Type"));
+	// Body untouched (no serializer matched).
+	strictEqual(response.body, "Hello World");
+	// Must not hang.
+	ok(elapsed < 1000);
+});
+
+test("attacker media type with invalid chars is not reflected verbatim (#10)", async (t) => {
+	// A permissive serializer regex matches an attacker-derived media type that
+	// contains characters disallowed by the media-type grammar (< >). The raw
+	// value must NOT be echoed into Content-Type; the matched-but-invalid value
+	// is dropped so a downstream default applies (here: no Content-Type set).
+	const handler = middy((event, context) => createHttpResponse());
+	handler.use(
+		httpResponseSerializer({
+			serializers: [
+				{
+					regex: /.*/,
+					serializer: ({ body }) => `serialized:${body}`,
+				},
+			],
+		}),
+	);
+
+	const event = { headers: {} };
+	const context = {
+		...defaultContext,
+		preferredMediaTypes: ["x/evil<script>json"],
+	};
+
+	const response = await handler(event, context);
+
+	// The serializer still ran (it matched), but the invalid value is not echoed.
+	strictEqual(response.body, "serialized:Hello World");
+	ok(!Object.hasOwn(response.headers, "Content-Type"));
+});
+
+test("valid media type still matches and sets Content-Type (#10 grammar pass)", async (t) => {
+	const handler = middy((event, context) => createHttpResponse());
+	handler.use(httpResponseSerializer(standardConfiguration));
+
+	const event = { headers: {} };
+	const context = {
+		...defaultContext,
+		preferredMediaTypes: ["application/json"],
+	};
+
+	const response = await handler(event, context);
+
+	deepStrictEqual(response, {
+		statusCode: 200,
+		headers: {
+			"Content-Type": "application/json",
+		},
+		body: '{"message":"Hello World"}',
+	});
 });
 
 test("onError skips serialization when request.response is undefined", async (t) => {

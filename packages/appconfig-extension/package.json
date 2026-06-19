@@ -1,6 +1,6 @@
 {
 	"name": "@middy/appconfig-extension",
-	"version": "7.6.7",
+	"version": "7.6.8",
 	"description": "AppConfig Lambda Extension middleware for the middy framework",
 	"type": "module",
 	"engines": {
@@ -63,10 +63,10 @@
 		"url": "https://github.com/sponsors/willfarrell"
 	},
 	"dependencies": {
-		"@middy/util": "7.6.7"
+		"@middy/util": "7.6.8"
 	},
 	"devDependencies": {
-		"@middy/core": "7.6.7",
+		"@middy/core": "7.6.8",
 		"@types/aws-lambda": "^8.0.0",
 		"@types/node": "^22.0.0"
 	}

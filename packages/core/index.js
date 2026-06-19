@@ -66,8 +66,6 @@ export const middy = (setupLambdaHandler, pluginConfig) => {
 	plugin.timeoutEarly = plugin.timeoutEarlyInMillis > 0;
 
 	// Pre-compute single-call plugin hooks as noop to avoid optional chaining
-	// Note: beforeMiddleware/afterMiddleware kept as optional chaining in runMiddlewares
-	// because V8 optimizes ?.() null-checks faster than noop calls in tight loops
 	plugin.requestStart ??= noop;
 	plugin.requestEnd ??= noop;
 	plugin.beforeHandler ??= noop;
@@ -155,7 +153,9 @@ const runRequest = async (
 	const timeoutEarly = plugin.timeoutEarly && getRemainingTimeInMillis;
 
 	try {
-		await runMiddlewares(request, beforeMiddlewares, plugin);
+		if (beforeMiddlewares.length) {
+			await runMiddlewares(request, beforeMiddlewares, plugin);
+		}
 
 		// Check if before stack hasn't exit early
 		if (!("earlyResponse" in request)) {
@@ -174,41 +174,51 @@ const runRequest = async (
 				request.context,
 				abortOpts,
 			);
-			if (timeoutEarly) {
-				let timeoutResolve;
-				const timeoutPromise = new Promise((resolve, reject) => {
-					timeoutResolve = () => {
-						handlerAbort.abort();
-						try {
-							resolve(plugin.timeoutEarlyResponse());
-						} catch (err) {
-							reject(err);
-						}
-					};
-				});
-				// Clamp to >= 0: when remaining Lambda time is below
-				// timeoutEarlyInMillis the raw delay is negative, which would emit
-				// a TimeoutNegativeWarning. A 0ms delay fires on the next tick.
-				timeoutID = setTimeout(
-					timeoutResolve,
-					Math.max(0, getRemainingTimeInMillis() - plugin.timeoutEarlyInMillis),
-				);
-				request.response = await Promise.race([handlerResult, timeoutPromise]);
+			if (handlerResult instanceof Promise) {
+				if (timeoutEarly) {
+					let timeoutResolve;
+					const timeoutPromise = new Promise((resolve, reject) => {
+						timeoutResolve = () => {
+							handlerAbort.abort();
+							try {
+								resolve(plugin.timeoutEarlyResponse());
+							} catch (err) {
+								reject(err);
+							}
+						};
+					});
+					// Clamp to >= 0: when remaining Lambda time is below
+					// timeoutEarlyInMillis the raw delay is negative, which would emit
+					// a TimeoutNegativeWarning. A 0ms delay fires on the next tick.
+					timeoutID = setTimeout(
+						timeoutResolve,
+						Math.max(
+							0,
+							getRemainingTimeInMillis() - plugin.timeoutEarlyInMillis,
+						),
+					);
+					request.response = await Promise.race([
+						handlerResult,
+						timeoutPromise,
+					]);
+				} else {
+					request.response = await handlerResult;
+				}
 			} else {
-				request.response = await handlerResult;
+				request.response = handlerResult;
 			}
 
-			// Stryker disable next-line ConditionalExpression: forcing this to `true` is equivalent - when no early timeout was scheduled timeoutID is undefined and clearTimeout(undefined) is a spec no-op, so the guard has no observable effect.
 			if (timeoutID) {
 				clearTimeout(timeoutID);
 			}
 
 			plugin.afterHandler();
-			await runMiddlewares(request, afterMiddlewares, plugin);
+			if (afterMiddlewares.length) {
+				await runMiddlewares(request, afterMiddlewares, plugin);
+			}
 		}
 	} catch (err) {
 		// timeout should be aborted when errors happen in handler
-		// Stryker disable next-line ConditionalExpression: forcing this to `true` is equivalent - clearTimeout(undefined) is a spec no-op when no timer was scheduled, so the guard cannot be observed. (The BlockStatement/false variants remain active and are covered by the "clear the scheduled early timeout when the handler throws" test.)
 		if (timeoutID) {
 			clearTimeout(timeoutID);
 		}
@@ -239,10 +249,13 @@ const runRequest = async (
 };
 
 const runMiddlewares = async (request, middlewares, plugin) => {
+	const beforeMiddlewareHook = plugin.beforeMiddleware;
+	const afterMiddlewareHook = plugin.afterMiddleware;
 	for (const nextMiddleware of middlewares) {
-		plugin.beforeMiddleware?.(nextMiddleware.name);
-		const res = await nextMiddleware(request);
-		plugin.afterMiddleware?.(nextMiddleware.name);
+		if (beforeMiddlewareHook) beforeMiddlewareHook(nextMiddleware.name);
+		let res = nextMiddleware(request);
+		if (res instanceof Promise) res = await res;
+		if (afterMiddlewareHook) afterMiddlewareHook(nextMiddleware.name);
 		// short circuit chaining and respond early
 		if (typeof res !== "undefined") {
 			request.earlyResponse = res;

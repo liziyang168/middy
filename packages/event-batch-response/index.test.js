@@ -1035,3 +1035,51 @@ test("after with no cached entry leaves an array response untouched", async () =
 	const response = await handler(event, defaultContext);
 	deepStrictEqual(response, settled);
 });
+
+// --- prototype-pollution-safe source lookup -----------------------------
+
+test("flattenBatchRecords: event-level eventSource matching Object.prototype member → []", () => {
+	// A source string equal to an inherited Object.prototype member ("constructor",
+	// "__proto__", "toString", "hasOwnProperty", "valueOf") must NOT resolve to a
+	// truthy inherited value; the unknown-source contract is a graceful [].
+	for (const proto of [
+		"constructor",
+		"__proto__",
+		"toString",
+		"hasOwnProperty",
+		"valueOf",
+	]) {
+		deepStrictEqual(
+			flattenBatchRecords({
+				eventSource: proto,
+				Records: [{ messageId: "a" }],
+			}),
+			[],
+			`event-level eventSource "${proto}" must be treated as unknown`,
+		);
+	}
+});
+
+test("flattenBatchRecords: record-level eventSource matching Object.prototype member → []", () => {
+	for (const proto of [
+		"constructor",
+		"__proto__",
+		"toString",
+		"hasOwnProperty",
+		"valueOf",
+	]) {
+		deepStrictEqual(
+			flattenBatchRecords({ Records: [{ eventSource: proto }] }),
+			[],
+			`record-level eventSource "${proto}" must be treated as unknown`,
+		);
+	}
+});
+
+test("before hook handles eventSource matching Object.prototype member gracefully", async () => {
+	const event = { eventSource: "constructor", Records: [{ messageId: "a" }] };
+	const handler = middy(async () => ({ pass: true })).use(eventBatchResponse());
+
+	const response = await handler(event, defaultContext);
+	deepStrictEqual(response, { pass: true });
+});

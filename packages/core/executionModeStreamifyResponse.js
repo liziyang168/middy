@@ -55,7 +55,8 @@ export const executionModeStreamifyResponse = (
 				handlerError = err;
 			}
 			try {
-				await plugin.requestEnd(request);
+				const requestEndResult = plugin.requestEnd(request);
+				if (requestEndResult instanceof Promise) await requestEndResult;
 			} catch (hookErr) {
 				if (handlerError) {
 					handlerError.cause ??= hookErr;

@@ -7,6 +7,13 @@ const defaultContext = {
 	getRemainingTimeInMillis: () => 1000,
 };
 
+// Non-Promise thenable built via a computed key: a literal `then` property
+// would trip lint/suspicious/noThenProperty, which should stay enabled to
+// catch accidental thenables; these tests need one deliberately to assert
+// middy never awaits it.
+const thenKey = "then";
+const createThenable = (onThen) => ({ [thenKey]: onThen });
+
 describe("middy core", () => {
 	test.beforeEach(async (t) => {
 		t.mock.timers.enable({ apis: ["Date", "setTimeout"] });
@@ -870,6 +877,39 @@ describe("middy core", () => {
 		}
 	});
 
+	test("Should not await a thenable returned by the requestEnd hook", async () => {
+		// Real-Promises-only contract: only a real Promise from requestEnd is
+		// awaited; a plain thenable is ignored, so its then() must never run.
+		let thenAwaited = false;
+		const handler = middy(() => "ok", {
+			requestEnd: () =>
+				createThenable((resolve) => {
+					thenAwaited = true;
+					resolve();
+				}),
+		});
+
+		const response = await handler(defaultEvent, defaultContext);
+
+		strictEqual(response, "ok");
+		strictEqual(thenAwaited, false);
+	});
+
+	test("Should await async requestEnd hook and propagate its rejection when handler succeeds", async () => {
+		const hookErr = new Error("requestEnd failed");
+		const handler = middy(() => "ok", {
+			requestEnd: async () => {
+				throw hookErr;
+			},
+		});
+		try {
+			await handler(defaultEvent, defaultContext);
+			throw new Error("Expected hook error to propagate");
+		} catch (e) {
+			strictEqual(e, hookErr);
+		}
+	});
+
 	test("Should preserve handler error when requestEnd hook also throws, attaching hook as .cause", async () => {
 		const handlerErr = new Error("handler failed");
 		const hookErr = new Error("requestEnd failed");
@@ -935,6 +975,236 @@ describe("middy core", () => {
 			const response = await handler(defaultEvent, context);
 			ok(response);
 		} catch (_e) {}
+	});
+
+	test("Should abort a non-async handler returning a pending promise when timeout expires", async (t) => {
+		// Not declared `async`: the early-timeout race keys on the RETURNED
+		// VALUE being a thenable, not on the function declaration, so a plain
+		// function handing back a pending promise must still be aborted.
+		const plugin = {
+			timeoutEarlyInMillis: 1,
+			timeoutEarlyResponse: () => "early response",
+		};
+		const context = {
+			getRemainingTimeInMillis: () => 2,
+		};
+
+		let abortFired = false;
+		let capturedSignal;
+		const handler = middy((event, context, { signal }) => {
+			capturedSignal = signal;
+			signal.addEventListener("abort", () => {
+				abortFired = true;
+			});
+			return new Promise(() => {});
+		}, plugin);
+
+		const response = await handler(defaultEvent, context);
+
+		// abort() dispatches listeners synchronously inside timeoutResolve,
+		// before timeoutEarlyResponse resolves the race, so both must be
+		// observable by the time the handler settles.
+		strictEqual(response, "early response");
+		strictEqual(abortFired, true);
+		strictEqual(capturedSignal.aborted, true);
+	});
+
+	test("Should return a non-Promise handler result while the reserve window has time left", async (t) => {
+		let timeoutCalled = false;
+		const plugin = {
+			timeoutEarlyInMillis: 5,
+			timeoutEarlyResponse: () => {
+				timeoutCalled = true;
+				return "timeout";
+			},
+		};
+		const context = {
+			// 6ms remaining > 5ms reserve: one ms of headroom left.
+			getRemainingTimeInMillis: () => 6,
+		};
+
+		let capturedSignal;
+		const handler = middy((event, context, { signal }) => {
+			capturedSignal = signal;
+			return "sync value";
+		}, plugin);
+
+		const response = await handler(defaultEvent, context);
+
+		strictEqual(response, "sync value");
+		strictEqual(timeoutCalled, false);
+		strictEqual(capturedSignal.aborted, false);
+	});
+
+	test("Should return a non-Promise handler result even when the reserve window is exhausted", async (t) => {
+		// Early timeout and abort only apply to handlers that return a real
+		// Promise: a non-Promise result means the handler already finished,
+		// so the completed value is returned untouched even when remaining
+		// time is at/below the reserve (the boundary where the race path
+		// would schedule a 0ms timer for a pending result).
+		let timeoutCalled = false;
+		const plugin = {
+			timeoutEarlyInMillis: 5,
+			timeoutEarlyResponse: () => {
+				timeoutCalled = true;
+				return "timeout";
+			},
+		};
+		const context = {
+			getRemainingTimeInMillis: () => 5,
+		};
+
+		let capturedSignal;
+		const handler = middy((event, context, { signal }) => {
+			capturedSignal = signal;
+			return "sync value";
+		}, plugin);
+
+		const response = await handler(defaultEvent, context);
+
+		strictEqual(response, "sync value");
+		strictEqual(timeoutCalled, false);
+		strictEqual(capturedSignal.aborted, false);
+	});
+
+	test("Should not abort a blocking synchronous handler that runs past the timeout window", async (t) => {
+		// Node is single-threaded: nothing can preempt a handler that blocks
+		// the event loop, so a synchronous handler can never observe
+		// signal.aborted === true mid-execution no matter how long it runs;
+		// middy only regains control after the handler has already returned
+		// its completed result, and a non-Promise result is returned as-is.
+		// Interrupting blocking sync code would require worker threads.
+		const plugin = {
+			timeoutEarlyInMillis: 5,
+			timeoutEarlyResponse: () => {
+				throw new Error("timeoutEarlyResponse must not fire");
+			},
+		};
+		const context = {
+			// Reserve window (1ms remaining vs 5ms reserve) is already
+			// exhausted before the handler even starts.
+			getRemainingTimeInMillis: () => 1,
+		};
+
+		let observedAbortDuringExecution = false;
+		let capturedSignal;
+		const handler = middy((event, context, { signal }) => {
+			capturedSignal = signal;
+			let spin = 1e6;
+			while (spin--) {
+				if (signal.aborted) {
+					observedAbortDuringExecution = true;
+				}
+			}
+			return "finished";
+		}, plugin);
+
+		const response = await handler(defaultEvent, context);
+
+		strictEqual(response, "finished");
+		strictEqual(observedAbortDuringExecution, false);
+		strictEqual(capturedSignal.aborted, false);
+	});
+
+	test("Should not call clearTimeout when no early timeout was scheduled", async (t) => {
+		// Sync results never schedule the early-timeout timer, so there is
+		// nothing to clear: clearTimeout must not be called on the success
+		// path nor on the sync-throw error path.
+		const original = globalThis.clearTimeout;
+		let calls = 0;
+		globalThis.clearTimeout = (...args) => {
+			calls++;
+			return original(...args);
+		};
+		try {
+			const handler = middy(() => "ok");
+			strictEqual(await handler(defaultEvent, defaultContext), "ok");
+			strictEqual(calls, 0);
+
+			const throwing = middy(() => {
+				throw new Error("handler failed");
+			});
+			await throwing(defaultEvent, defaultContext).catch(() => {});
+			strictEqual(calls, 0);
+		} finally {
+			globalThis.clearTimeout = original;
+		}
+	});
+
+	test("Should invoke the handler synchronously when no before middlewares are attached", async (t) => {
+		// Zero-overhead contract: with an empty before stack nothing is
+		// awaited before the handler, so it runs within the same synchronous
+		// call. Any added await/race on this path breaks this assertion.
+		let called = false;
+		const handler = middy(() => {
+			called = true;
+		});
+
+		const invocation = handler(defaultEvent, defaultContext);
+
+		strictEqual(called, true);
+		await invocation;
+	});
+
+	test("Should settle a bare warm invocation in an exact number of microtasks", async (t) => {
+		// Pins the microtask budget of the fast path: sync handler, no
+		// middlewares, timeout disabled. The only await on the whole path is
+		// executionModeStandard awaiting runRequest's already-settled promise
+		// (tick 1); the invocation's own .then callback lands on tick 2.
+		// Any extra await/race re-introduced on this path adds a tick and
+		// fails the tick-2 assertion.
+		const handler = middy(() => "ok", { timeoutEarlyInMillis: 0 });
+
+		const invocation = handler(defaultEvent, defaultContext);
+		let settled = false;
+		invocation.then(() => {
+			settled = true;
+		});
+
+		await null; // tick 1
+		strictEqual(settled, false);
+		await null; // tick 2
+		strictEqual(settled, true);
+		strictEqual(await invocation, "ok");
+	});
+
+	test("Should not consult getRemainingTimeInMillis for a non-Promise handler result", async (t) => {
+		// A sync result skips the timeout race entirely, so the remaining
+		// time is never read (the race path would call it to compute the
+		// timer delay).
+		let clockReads = 0;
+		const context = {
+			getRemainingTimeInMillis: () => {
+				clockReads++;
+				return 30000;
+			},
+		};
+
+		const handler = middy(() => "sync value");
+
+		const response = await handler(defaultEvent, context);
+
+		strictEqual(response, "sync value");
+		strictEqual(clockReads, 0);
+	});
+
+	test("Should treat a thenable returned by a before middleware as an early response without unwrapping it", async (t) => {
+		// Real-Promises-only contract: a non-Promise thenable returned by a
+		// middleware is a defined value, so it short-circuits as an early
+		// response as-is; it is NOT awaited first (awaiting would unwrap it
+		// to undefined here and let the handler run).
+		let handlerCalled = false;
+		const handler = middy(() => {
+			handlerCalled = true;
+			return "from handler";
+		}).before(() => createThenable((resolve) => resolve(undefined)));
+
+		// The async invocation boundary adopts the thenable, so the awaited
+		// result is what it resolves to.
+		const response = await handler(defaultEvent, defaultContext);
+
+		strictEqual(handlerCalled, false);
+		strictEqual(response, undefined);
 	});
 
 	test("Should throw error when timeout expires", async (t) => {

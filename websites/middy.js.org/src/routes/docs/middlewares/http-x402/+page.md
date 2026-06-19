@@ -8,6 +8,8 @@ Implements the [x402 payment protocol](https://x402.org) for API Gateway and Fun
 
 After settlement, payer info is available via `request.internal.x402` for downstream use (e.g. logging, rate-limiting per wallet).
 
+> **Consider AWS WAF AI traffic monetization.** If you front your handler with Amazon CloudFront, AWS WAF can now return the x402 HTTP 402 challenge and verify payment at the edge, before requests reach Lambda, with no application code. This middleware remains the right fit when you need per-request pricing in handler logic, access to payer info during execution, or you are not on CloudFront. See [AWS WAF adds AI traffic monetization capability](https://aws.amazon.com/blogs/aws/aws-waf-adds-ai-traffic-monetization-capability-to-help-content-owners-charge-ai-bots-for-content-access/).
+
 ## Install
 
 ```bash npm2yarn

@@ -2,15 +2,19 @@
 // SPDX-License-Identifier: MIT
 import { checkServerIdentity } from "node:tls";
 
-export default (ca) => ({
-	ssl: {
-		rejectUnauthorized: true,
-		ca,
-		checkServerIdentity: (host, cert) => {
-			const error = checkServerIdentity(host, cert);
-			if (error && !cert.subject?.CN?.endsWith(".rds.amazonaws.com")) {
-				return error;
-			}
+export default (ca) => {
+	const region = process.env.AWS_REGION;
+	const suffix = region ? `.${region}.rds.amazonaws.com` : ".rds.amazonaws.com";
+	return {
+		ssl: {
+			rejectUnauthorized: true,
+			ca,
+			checkServerIdentity: (host, cert) => {
+				const error = checkServerIdentity(host, cert);
+				if (error && !cert.subject?.CN?.endsWith(suffix)) {
+					return error;
+				}
+			},
 		},
-	},
-});
+	};
+};

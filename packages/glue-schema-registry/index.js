@@ -152,12 +152,18 @@ const glueSchemaRegistryMiddleware = (opts = {}) => {
 	};
 };
 
+const schemaVersionIdPattern =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const resolveSchemaVersion = async (
 	schemaVersionId,
 	options,
 	request,
 ) => {
-	if (typeof schemaVersionId !== "string" || schemaVersionId.length === 0) {
+	if (
+		typeof schemaVersionId !== "string" ||
+		!schemaVersionIdPattern.test(schemaVersionId)
+	) {
 		throw new TypeError("resolveSchemaVersion: schemaVersionId required");
 	}
 	const merged = { ...defaults, ...options };

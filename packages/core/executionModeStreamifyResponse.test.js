@@ -15,6 +15,13 @@ const context = {
 	getRemainingTimeInMillis: () => 1000,
 };
 
+// Non-Promise thenable built via a computed key: a literal `then` property
+// would trip lint/suspicious/noThenProperty, which should stay enabled to
+// catch accidental thenables; these tests need one deliberately to assert
+// middy never awaits it.
+const thenKey = "then";
+const createThenable = (onThen) => ({ [thenKey]: onThen });
+
 // Scoped under a describe so the timer-mock beforeEach/afterEach register on
 // this suite instead of the shared root. Under the node-test runner
 // (isolation:"none") all core test files run in one process, where a
@@ -503,6 +510,45 @@ describe("executionModeStreamifyResponse", () => {
 		const handler = middy(async () => "ok", {
 			executionMode: executionModeStreamifyResponse,
 			requestEnd: () => {
+				throw hookErr;
+			},
+		});
+
+		const { responseStream } = createResponseStreamMockAndCapture();
+		try {
+			await handler(event, responseStream, context);
+			throw new Error("Expected hook error to propagate");
+		} catch (e) {
+			strictEqual(e, hookErr);
+		}
+	});
+
+	test("Should not await a thenable returned by requestEnd in streamify mode", async (t) => {
+		// Real-Promises-only contract: only a real Promise from requestEnd is
+		// awaited; a plain thenable is ignored, so its then() must never run.
+		let thenAwaited = false;
+		const handler = middy(async () => "ok", {
+			executionMode: executionModeStreamifyResponse,
+			requestEnd: () =>
+				createThenable((resolve) => {
+					thenAwaited = true;
+					resolve();
+				}),
+		});
+
+		const { responseStream, chunkResponse } =
+			createResponseStreamMockAndCapture();
+		await handler(event, responseStream, context);
+
+		strictEqual(thenAwaited, false);
+		strictEqual(chunkResponse(), "ok");
+	});
+
+	test("Should await async requestEnd hook and propagate its rejection in streamify mode", async (t) => {
+		const hookErr = new Error("requestEnd failed");
+		const handler = middy(async () => "ok", {
+			executionMode: executionModeStreamifyResponse,
+			requestEnd: async () => {
 				throw hookErr;
 			},
 		});

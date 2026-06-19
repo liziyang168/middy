@@ -3,6 +3,7 @@ import { test } from "node:test";
 import middy from "../core/index.js";
 import httpHeaderNormalizer, {
 	httpHeaderNormalizerValidateOptions,
+	NORMALIZED_KEY_CACHE_MAX,
 } from "./index.js";
 
 const defaultContext = {
@@ -540,6 +541,77 @@ test("It should not merge any defaults into multiValueHeaders when defaultHeader
 		}),
 	);
 	strictEqual(Object.keys(resultingEvent.multiValueHeaders).length, 1);
+});
+
+// Security: the normalized-key cache must not grow without bound when fed
+// attacker-controlled, never-before-seen header names across warm invocations.
+test("It should still normalize header keys correctly when fed more distinct keys than the cap", async (t) => {
+	// One middleware instance shares the cache across both invocations.
+	const normalizer = httpHeaderNormalizer();
+	const handler = middy((event, context) => event).use(normalizer);
+
+	// First invocation fills the cache exactly to the cap.
+	const fillHeaders = {};
+	for (let i = 0; i < NORMALIZED_KEY_CACHE_MAX; i++) {
+		fillHeaders[`X-Fill-${i}`] = String(i);
+	}
+	const filled = await handler({ headers: fillHeaders }, defaultContext);
+	// Every key normalized correctly while filling.
+	for (let i = 0; i < NORMALIZED_KEY_CACHE_MAX; i++) {
+		strictEqual(filled.headers[`x-fill-${i}`], String(i));
+	}
+
+	// Second invocation: brand-new keys beyond the cap. The cache is full, so
+	// these go through the uncached code path and must still normalize.
+	const overflowHeaders = {
+		"X-OVER-One": "1",
+		"X-OVER-Two": "2",
+		"X-OVER-Three": "3",
+	};
+	const overflowed = await handler(
+		{ headers: overflowHeaders },
+		defaultContext,
+	);
+	deepStrictEqual(
+		overflowed.headers,
+		Object.assign(Object.create(null), {
+			"x-over-one": "1",
+			"x-over-two": "2",
+			"x-over-three": "3",
+		}),
+	);
+});
+
+test("It should evict the oldest entry once the cap is reached", async (t) => {
+	let calls = 0;
+	const normalizeHeaderKey = (key) => {
+		calls += 1;
+		return key.toLowerCase();
+	};
+	const normalizer = httpHeaderNormalizer({ normalizeHeaderKey });
+	const handler = middy((event, context) => event).use(normalizer);
+
+	// Fill the cache to the cap; "a-0" is the oldest entry.
+	const fillHeaders = {};
+	for (let i = 0; i < NORMALIZED_KEY_CACHE_MAX; i++) {
+		fillHeaders[`A-${i}`] = "v";
+	}
+	await handler({ headers: fillHeaders }, defaultContext);
+	strictEqual(calls, NORMALIZED_KEY_CACHE_MAX);
+
+	// One new key evicts the oldest ("A-0") and is itself cached. Eviction is
+	// observed through the public normalizeHeaderKey option (call count), not by
+	// inspecting internal cache state.
+	await handler({ headers: { "Z-NEW": "v" } }, defaultContext);
+	strictEqual(calls, NORMALIZED_KEY_CACHE_MAX + 1);
+
+	// "A-0" was evicted, so seeing it again must re-normalize (uncached path).
+	await handler({ headers: { "A-0": "v" } }, defaultContext);
+	strictEqual(calls, NORMALIZED_KEY_CACHE_MAX + 2);
+
+	// "Z-NEW" is still cached, so it must NOT trigger another normalization.
+	await handler({ headers: { "Z-NEW": "v2" } }, defaultContext);
+	strictEqual(calls, NORMALIZED_KEY_CACHE_MAX + 2);
 });
 
 test("httpHeaderNormalizerValidateOptions accepts valid options and rejects typos", () => {

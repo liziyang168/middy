@@ -131,7 +131,7 @@ const kafkaRecords = (event) => {
 	return out;
 };
 
-const sources = {
+const sources = Object.assign(Object.create(null), {
 	"aws:sqs": {
 		getRecords: sqsLikeRecords,
 		identify: (record) => record?.messageId,
@@ -161,7 +161,7 @@ const sources = {
 		identify: (record) => record?.recordId,
 		buildResponse: buildFirehoseResponse,
 	},
-};
+});
 sources.SelfManagedKafka = sources["aws:kafka"];
 
 const detectEventSource = (event) => {
