@@ -18,6 +18,18 @@ const { title = "Documentation", description = "", headings = [], status, childr
 
 const dateModified = $derived(getLastUpdated(page.url?.pathname ?? ""));
 const dateModifiedDisplay = $derived(dateModified ? new Date(dateModified).toISOString().slice(0, 10) : null);
+
+// Doc pages under these categories map 1:1 to a package directory (slug === package name),
+// except for these index/landing pages which are not packages.
+const packageCategories = new Set(["middlewares", "routers", "handlers"]);
+const nonPackageSlugs = new Set(["intro", "third-party"]);
+const sourceUrl = $derived.by(() => {
+	const segments = (page.url?.pathname ?? "").split("/").filter(Boolean);
+	if (segments[0] !== "docs" || segments.length !== 3) return null;
+	const [, category, slug] = segments;
+	if (!packageCategories.has(category) || nonPackageSlugs.has(slug)) return null;
+	return `https://github.com/middyjs/middy/tree/main/packages/${slug}`;
+});
 </script>
 <Seo
 	{title}
@@ -34,6 +46,9 @@ const dateModifiedDisplay = $derived(dateModified ? new Date(dateModified).toISO
     {#snippet header()}
 		<Hgroup>
 			<H1>{title}</H1>
+			{#if sourceUrl}
+				<P class="source-link"><small><A href={sourceUrl}>View source on GitHub</A></small></P>
+			{/if}
 		</Hgroup>
     {/snippet}
     {#snippet aside()}
