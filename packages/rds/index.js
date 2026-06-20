@@ -1,6 +1,11 @@
 // Copyright 2017 - 2026 will Farrell, Luciano Mammino, and Middy contributors.
 // SPDX-License-Identifier: MIT
-import { canPrefetch, processCache, validateOptions } from "@middy/util";
+import {
+	canPrefetch,
+	getInternal,
+	processCache,
+	validateOptions,
+} from "@middy/util";
 
 const name = "rds";
 const pkg = `@middy/${name}`;
@@ -62,9 +67,15 @@ const rdsMiddleware = (opts = {}) => {
 		);
 	}
 
-	const buildConfig = (request) => {
-		if (!options.internalKey) return options.config;
-		const token = request?.internal?.[options.internalKey];
+	const buildConfig = async (request) => {
+		// @middy/rds-signer stores the auth token in request.internal as an
+		// unresolved Promise; resolve it through getInternal (the standard middy
+		// contract) rather than reading request.internal[key] raw, which would
+		// hand pg/postgres a Promise as `password` and fail SASL auth.
+		const { token } = await getInternal(
+			{ token: options.internalKey },
+			request,
+		);
 		if (token === undefined) {
 			throw new Error(
 				`internalKey '${options.internalKey}' not found; ensure @middy/rds-signer runs before @middy/rds`,
@@ -74,7 +85,9 @@ const rdsMiddleware = (opts = {}) => {
 		return { ...options.config, password: token };
 	};
 
-	const fetch = (request) => options.client(buildConfig(request));
+	const fetch = options.internalKey
+		? async (request) => options.client(await buildConfig(request))
+		: (request) => options.client(options.config);
 
 	if (!options.internalKey && canPrefetch(options)) {
 		processCache(options, fetch);
@@ -82,7 +95,8 @@ const rdsMiddleware = (opts = {}) => {
 
 	const rdsMiddlewareBefore = async (request) => {
 		const { value } = processCache(options, () => fetch(request), request);
-		Object.assign(request.context, { [options.contextKey]: await value });
+		const resolved = await value;
+		Object.assign(request.context, { [options.contextKey]: resolved });
 	};
 	const rdsMiddlewareAfter = async (request) => {
 		try {
