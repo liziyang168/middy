@@ -148,6 +148,7 @@ test("callbackWaitsForEmptyEventLoop should be false in handler but true after i
 });
 
 class DurableContextImpl {
+	[Symbol.for("@aws/durable-execution-sdk-js/durable-context")] = true;
 	constructor(props = {}) {
 		Object.assign(this, props);
 	}

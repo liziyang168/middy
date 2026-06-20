@@ -115,6 +115,7 @@ test("returns [] for missing / non-object events", async () => {
 // --- Durable Functions auto-detection ----------------------------------
 
 class DurableContextImpl {
+	[Symbol.for("@aws/durable-execution-sdk-js/durable-context")] = true;
 	constructor() {
 		this.getRemainingTimeInMillis = () => 1000;
 		this.stepCalls = [];

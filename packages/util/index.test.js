@@ -1556,7 +1556,12 @@ test("HttpError should create error with explicit expose", async (t) => {
 	strictEqual(e.expose, true);
 });
 
+const durableContextBrand = Symbol.for(
+	"@aws/durable-execution-sdk-js/durable-context",
+);
+
 class DurableContextImpl {
+	[durableContextBrand] = true;
 	constructor(props = {}) {
 		Object.assign(this, props);
 	}
@@ -1570,8 +1575,20 @@ class DurableContextImpl {
 
 // isExecutionModeDurable
 describe("isExecutionModeDurable", () => {
-	test("returns true for a real durable context (has step + runInChildContext)", () => {
+	test("returns true for a real durable context (brand + step)", () => {
 		strictEqual(isExecutionModeDurable(new DurableContextImpl()), true);
+	});
+
+	test("returns true for a v2+ context branded via the global symbol registry", () => {
+		strictEqual(isExecutionModeDurable({ [durableContextBrand]: true }), true);
+	});
+
+	test("returns false for an unbranded context, even with a step method (v1 / pre-#558 unsupported)", () => {
+		strictEqual(isExecutionModeDurable({ step() {} }), false);
+	});
+
+	test("returns false when the brand is present but not strictly true", () => {
+		strictEqual(isExecutionModeDurable({ [durableContextBrand]: 1 }), false);
 	});
 
 	test("returns false for a plain Lambda context", () => {
