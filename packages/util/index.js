@@ -736,9 +736,11 @@ export const lambdaContextKeys = [
 
 export const executionContextKeys = ["tenantId"];
 
-// TODO https://github.com/aws/aws-durable-execution-sdk-js/pull/558
+const durableContextBrand = Symbol.for(
+	"@aws/durable-execution-sdk-js/durable-context",
+);
 export const isExecutionModeDurable = (context) => {
-	return typeof context?.step === "function";
+	return context?.[durableContextBrand] === true;
 };
 
 export const executionContext = (request, key, context) => {

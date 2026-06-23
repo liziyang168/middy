@@ -2,6 +2,7 @@ import { ok, strictEqual } from "node:assert/strict";
 import { test } from "node:test";
 import { clearCache, processCache } from "@middy/util";
 import middy from "../core/index.js";
+import rdsSigner from "../rds-signer/index.js";
 import rdsMiddleware, { rdsValidateOptions } from "./index.js";
 
 test.afterEach(() => {
@@ -106,6 +107,106 @@ test("It should merge token from internalKey into config.password", async (t) =>
 	strictEqual(arg.password, "iam-token-abc");
 	strictEqual(arg.host, validHost);
 	strictEqual(arg.username, "admin");
+});
+
+test("It should resolve a Promise-valued internalKey token before passing it as password", async (t) => {
+	// @middy/rds-signer stores the auth token in request.internal as an UNRESOLVED
+	// Promise (it never awaits getAuthToken). Per the middy contract, consumers must
+	// resolve internal values via getInternal(); reading request.internal[key] raw
+	// yields the Promise itself. Passing that Promise to pg as `password` triggers a
+	// SASL "client password must be a string" error, so @middy/rds must resolve it.
+	const { client } = buildClient(t);
+	const handler = middy(() => {})
+		.before(async (request) => {
+			request.internal.rdsToken = Promise.resolve("iam-token-abc");
+		})
+		.use(
+			rdsMiddleware({
+				client,
+				config: { host: validHost, username: "admin" },
+				internalKey: "rdsToken",
+				cacheExpiry: 0,
+				disablePrefetch: true,
+			}),
+		);
+
+	await handler(defaultEvent, newContext());
+	const arg = client.mock.calls[0].arguments[0];
+	strictEqual(arg.password, "iam-token-abc");
+	strictEqual(arg.host, validHost);
+	strictEqual(arg.username, "admin");
+});
+
+test("It should resolve the real @middy/rds-signer token end-to-end (integration)", async (t) => {
+	// The real signer contract: rds-signer stores getAuthToken()'s result in
+	// request.internal as an unresolved Promise; rds must resolve it into password.
+	const authToken =
+		"https://db.example.rds.amazonaws.com:5432/?Action=connect&X-Amz-Security-Token=abc";
+	const getAuthToken = t.mock.fn(async () => authToken);
+	class AwsClient {
+		getAuthToken = getAuthToken;
+	}
+	const { client } = buildClient(t);
+	const handler = middy(() => {})
+		.use(
+			rdsSigner({
+				AwsClient,
+				cacheExpiry: 0,
+				disablePrefetch: true,
+				fetchData: {
+					rdsToken: {
+						hostname: "db.example.rds.amazonaws.com",
+						port: 5432,
+						username: "admin",
+						region: "us-east-1",
+					},
+				},
+			}),
+		)
+		.use(
+			rdsMiddleware({
+				client,
+				config: { host: validHost, username: "admin" },
+				internalKey: "rdsToken",
+				cacheExpiry: 0,
+				disablePrefetch: true,
+			}),
+		);
+
+	await handler(defaultEvent, newContext());
+	strictEqual(getAuthToken.mock.callCount(), 1);
+	strictEqual(client.mock.calls[0].arguments[0].password, authToken);
+});
+
+test("It should surface a rejected internalKey token as an error instead of building a client with it", async (t) => {
+	const { client } = buildClient(t);
+	const handler = middy(() => {})
+		.before(async (request) => {
+			// rds-signer stores a rejected Promise when getAuthToken fails; getInternal
+			// must surface that error rather than hand the rejected Promise to the
+			// client as `password`.
+			const rejected = Promise.reject(new Error("signer boom"));
+			rejected.catch(() => {}); // pre-silence the standalone warning, as processCache does
+			request.internal.rdsToken = rejected;
+		})
+		.use(
+			rdsMiddleware({
+				client,
+				config: { host: validHost },
+				internalKey: "rdsToken",
+				cacheExpiry: 0,
+				disablePrefetch: true,
+			}),
+		);
+
+	let captured;
+	try {
+		await handler(defaultEvent, newContext());
+	} catch (e) {
+		captured = e;
+	}
+	ok(captured);
+	strictEqual(client.mock.callCount(), 0);
 });
 
 test("It should throw when internalKey is set but token is missing", async (t) => {

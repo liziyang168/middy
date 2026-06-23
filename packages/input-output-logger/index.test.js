@@ -13,6 +13,7 @@ const defaultContext = {
 };
 
 class DurableContextImpl {
+	[Symbol.for("@aws/durable-execution-sdk-js/durable-context")] = true;
 	constructor(props = {}) {
 		Object.assign(this, props);
 	}

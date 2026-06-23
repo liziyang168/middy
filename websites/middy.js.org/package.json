@@ -2,7 +2,7 @@
 	"name": "middy.js.org",
 	"description": "SvelteKit SSR",
 	"private": true,
-	"version": "7.6.8",
+	"version": "7.7.0",
 	"type": "module",
 	"scripts": {
 		"prestart": "node src/scripts/build-docs-mtimes.mjs",
@@ -25,7 +25,7 @@
 		"@willfarrell-ds/vanilla": "0.0.0-alpha.6",
 		"hast-util-to-string": "3.0.1",
 		"mdast-util-to-string": "4.0.0",
-		"uuid": "14.0.0"
+		"uuid": "14.0.1"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-cloudflare": "^7.0.0",

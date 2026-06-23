@@ -570,6 +570,7 @@ test("onError preserves a pre-existing response", async () => {
 
 test("under durable context, success path produces empty batchItemFailures", async () => {
 	class DurableContextImpl {
+		[Symbol.for("@aws/durable-execution-sdk-js/durable-context")] = true;
 		constructor() {
 			this.getRemainingTimeInMillis = () => 1000;
 		}
@@ -597,6 +598,7 @@ test("under durable context, success path produces empty batchItemFailures", asy
 
 test("onError under durable context: no-op (durable owns retry)", async () => {
 	class DurableContextImpl {
+		[Symbol.for("@aws/durable-execution-sdk-js/durable-context")] = true;
 		constructor() {
 			this.getRemainingTimeInMillis = () => 1000;
 		}
