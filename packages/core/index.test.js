@@ -1723,20 +1723,19 @@ describe("middy core", () => {
 		strictEqual(caught.cause, existingCause);
 	});
 
-	// #1661: a middleware must be able to establish per-invocation async
-	// context that the handler (and everything it calls) observes, so that
-	// concurrent invocations on one execution environment (Lambda Managed
-	// Instances) stay isolated. This test uses the only mechanism today's
-	// API offers, entering the store in `before` (the #1232 workaround),
-	// and FAILS: an `await` resumes under the context that was ambient when
-	// it executed. enterWith survives only when nothing suspends before it
-	// runs; the moment any earlier middleware awaits, runMiddlewares' and
-	// runRequest's continuations have already captured the storeless frame,
-	// so the entered store never reaches the handler. Realistic stacks
-	// always have an async middleware (parser, auth, ssm, ...) ahead, so
-	// the workaround breaks silently. Making this pass requires composing
-	// around the handler call site (index.js lambdaHandler call), which no
-	// middleware hook can do.
+	// #1661 contract: a store entered with enterWith() in a hook's
+	// synchronous section (before the hook's first await) reaches the
+	// handler and every later middleware, regardless of async middlewares
+	// registered ahead, so concurrent invocations on one execution
+	// environment (Lambda Managed Instances) stay isolated. This holds
+	// because runRequest inlines the middleware loops beside the handler
+	// call site: an `await` resumes under the context that was ambient when
+	// it executed, so awaiting an intermediate async helper (the pre-fix
+	// runMiddlewares) would pin the handler's continuation to the storeless
+	// frame and silently drop the store. This test goes red if the loops
+	// are ever extracted into an async helper again. Entering the store
+	// after an await inside the same hook stays unsupported (inherent
+	// AsyncLocalStorage semantics); enter it synchronously.
 	test("a middleware can establish per-invocation async context for the handler", async (t) => {
 		const als = new AsyncLocalStorage();
 		const seen = {};
