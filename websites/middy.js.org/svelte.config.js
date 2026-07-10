@@ -1,9 +1,9 @@
 import { resolve } from "node:path";
 import adapter from "@sveltejs/adapter-cloudflare";
 import { mdsvex } from "mdsvex";
+import tardisec from "./.tardisec.sveltekit.json" with { type: "json" };
 import { rehypeAddHeadingIds } from "./src/lib/rehype-add-heading-ids.js";
 import { remarkExtractHeadings } from "./src/lib/remark-extract-headings.js";
-import tardisec from "./tardisec.json" with { type: "json" };
 
 // import preprocess from 'svelte-preprocess'
 
@@ -21,7 +21,7 @@ const config = {
 		},
 		appDir: "_",
 		csp: {
-			...tardisec["svelte.config.js"]["Content-Security-Policy"],
+			...tardisec.kit.csp,
 			mode: "hash",
 			directives: {
 				"default-src": ["none"], // 'report-sha256'
@@ -43,6 +43,17 @@ const config = {
 				"worker-src": ["self"],
 				"report-to": ["default"],
 				//'report-uri': [`https://${domain}.report-to.org`]
+			},
+			reportOnly: {
+				"base-uri": ["none"],
+				"default-src": ["none", "report-sample", "'report-sha256'"],
+				"form-action": ["none"],
+				"frame-ancestors": ["none"],
+				"report-to": ["default"],
+				"report-uri": [
+					"https://9a3890fa-a783-51c2-b20f-0dbe457d526f.report-to.org",
+				],
+				"require-trusted-types-for": ["script"],
 			},
 		},
 		csrf: {

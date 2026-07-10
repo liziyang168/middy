@@ -21,8 +21,8 @@
 	},
 	"dependencies": {
 		"@plausible-analytics/tracker": "0.4.5",
-		"@willfarrell-ds/svelte": "0.0.0-alpha.6",
-		"@willfarrell-ds/vanilla": "0.0.0-alpha.6",
+		"@willfarrell-ds/svelte": "0.0.0-alpha.7",
+		"@willfarrell-ds/vanilla": "0.0.0-alpha.7",
 		"hast-util-to-string": "3.0.1",
 		"mdast-util-to-string": "4.0.0",
 		"uuid": "14.0.1"
